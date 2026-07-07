@@ -1,0 +1,19 @@
+{
+    "name": "dereu/laravel-boost",
+    "description": "Dereu WhatsApp integration skill & AI guidelines for Laravel Boost",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["dereu", "whatsapp", "laravel-boost", "ai", "agent-skills"],
+    "homepage": "https://docs.dereu.noderail.io",
+    "require": {
+        "php": "^8.2"
+    },
+    "require-dev": {
+        "laravel/boost": "^1.0"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
