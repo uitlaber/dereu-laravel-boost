@@ -91,6 +91,57 @@ Content-Type: application/json
   используйте другой номер.
 - `502` — временный сбой Meta, ретраить со свежим `code`.
 
+## 2b. Hosted Embedded Signup (подключение с сайта партнёра, без своего ES)
+
+Альтернатива §2. ES-попап Meta крутится на **нашем** домене `connect.dereu.*` (он один раз в вайтлисте
+Meta App) — домен партнёра вайтлистить не надо, FB SDK к себе тащить не надо. Партнёр встраивает подписанную
+кнопку; клиент проходит ES у нас и возвращается на `return_url` партнёра. Полный гайд —
+`docs/partner-integration.md` §11, готовый хелпер — `examples/DereuConnect.php` (рядом с этой скилл).
+
+Оператор выдаёт партнёру `connect_signing_secret` (`consec_...`) + `allowed_return_origins`. Схема подписи —
+симметричный HMAC-SHA256 над base64url-строкой (НЕ JWT): подписывается строка `d`, а не её JSON.
+
+**1. Партнёр строит подписанный payload** и встраивает виджет (или ручной `window.open`):
+
+```php
+function b64url(string $b): string { return rtrim(strtr(base64_encode($b), '+/', '-_'), '='); }
+
+$payload = ['external_id' => 'org_123', 'return_url' => 'https://app.partner.kz/done',
+            'nonce' => $nonce = bin2hex(random_bytes(16)), 'exp' => time() + 600];   // nonce сохранить
+$d   = b64url(json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+$sig = b64url(hash_hmac('sha256', $d, $connectSigningSecret, true));   // подписываем строку $d
+$p   = $keyPrefix;   // напр. plat_ab12cd
+```
+
+```html
+<script src="https://connect.dereu.io/widget.js"
+        data-connect-url="https://connect.dereu.io/connect"
+        data-payload="{d}" data-prefix="{p}" data-sig="{sig}"
+        data-label="Подключить WhatsApp"></script>
+```
+
+**2. Верификация OUT-редиректа** `return_url?result=<b64>&sig=<hmac>` (`result` =
+`{dereu_company_id, phone_number_id, waba_id, status, nonce}`):
+
+```php
+$expected = b64url(hash_hmac('sha256', $_GET['result'], $connectSigningSecret, true));
+if (! hash_equals($expected, $_GET['sig'])) { abort(400); }              // подпись
+$data = json_decode(base64_decode(strtr($_GET['result'], '-_', '+/')), true);
+if (! consumeNonce($data['nonce'])) { abort(409); }                      // one-time, ваш стор
+```
+
+**3. Забрать `api_key`** (наружу в OUT не отдаётся) — S2S своим `plat_`-ключом:
+
+```
+POST /platform/companies/{external_id}/api-key/reissue
+Authorization: Bearer {DEREU_PLATFORM_KEY}
+```
+
+- **200**: `{ "api_key": "dereu_..." }` — показывается один раз. `409` — компания чужого партнёра.
+
+Требования: `return_url` origin ∈ `allowed_return_origins` (строгий scheme+host+port, иначе
+`422 return_url_not_allowed`); `exp` 5–10 мин (`422 expired`); `nonce` one-time (`409 nonce_used`).
+
 ## 3. Приём входящих (webhook-форвард)
 
 Один webhook URL/secret на весь проект (настраивается при выпуске platform key), не per-компания.
