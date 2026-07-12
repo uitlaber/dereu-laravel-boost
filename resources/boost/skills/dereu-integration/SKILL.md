@@ -181,10 +181,31 @@ if (! hash_equals($expected, (string) $signature)) {
   (см. gotcha `dereu_company_id` ≠ `external_id`).
 - Дедуп: входящие сообщения — по `wamid` (одно сообщение может дать несколько статусных событий);
   доставки статусов — по `event_id`.
-- `event`: `message_received`, `message_sent`, `message_delivered`, `message_read`, `message_failed`.
+- `event`: `message_received`, `message_sent`, `message_delivered`, `message_read`, `message_failed`,
+  `template_status_update`.
 - `type` известные значения: `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`,
   `interactive`, `button`, `order`, `contacts`, `reaction`, `system`, `unsupported` — список не закрыт,
   не падайте на неизвестном `type`.
+- `template_status_update` — статус шаблона в Meta изменился (модерация). У этого события нет `from`/
+  `wamid`/`type`, форма другая:
+
+  ```json
+  {
+    "event": "template_status_update",
+    "event_id": "01J8Z...",
+    "company_id": "co_abc123",
+    "waba_id": "9876543210",
+    "payload": {
+      "name": "order_shipped",
+      "language": "ru",
+      "status": "approved",
+      "reason": null
+    }
+  }
+  ```
+
+  `payload.status`: `pending` / `approved` / `rejected`. `payload.reason` заполнен только при `rejected`
+  (текст причины от Meta), иначе `null`.
 - Отвечайте `2xx` быстро (обработку — в очередь). Ретраи с backoff, при исчерпании — dead-letter у Dereu.
 
 ## 4. Отправка сообщений
@@ -234,6 +255,79 @@ Authorization: Bearer {DEREU_PLATFORM_KEY}
 
 Идемпотентно: несуществующий `external_id` → `404`, уже деактивированная → `410`. Без `purge=true`
 входящие хранятся ещё 30 дней. Ответ **200**: `{ "dereu_company_id": "...", "deactivated": true, "purged": false }`.
+
+## 7. Управление шаблонами
+
+S2S-эндпоинты под platform key — партнёр управляет шаблонами компании без захода в ЛК. Изоляция та же,
+что у остальных `/platform/*`: чужой или несуществующий `external_id` → `409`.
+
+**Список:**
+
+```
+GET /platform/companies/{external_id}/templates
+Authorization: Bearer {DEREU_PLATFORM_KEY}
+```
+
+**200**: `{ "data": [{ "id": 1, "name": "order_shipped", "language": "ru", "category": "utility",
+"status": "approved", "components": [...] }] }` — `components` в форме Meta (см. ниже).
+
+**Создание:**
+
+```
+POST /platform/companies/{external_id}/templates
+Authorization: Bearer {DEREU_PLATFORM_KEY}
+Content-Type: application/json
+
+{
+  "phone_number_id": "1234567890",
+  "name": "order_shipped",
+  "language": "ru",
+  "category": "utility",
+  "body": "Ваш заказ {{1}} отправлен, ожидайте {{2}} дней.",
+  "components": [
+    { "type": "HEADER", "format": "TEXT", "text": "Статус заказа" },
+    { "type": "FOOTER", "text": "Спасибо, что выбрали нас" },
+    { "type": "BUTTONS", "buttons": [
+      { "type": "QUICK_REPLY", "text": "Уточнить" },
+      { "type": "URL", "text": "Отследить", "url": "https://x.kz/track/{{1}}", "example": ["abc123"] }
+    ] }
+  ],
+  "example": { "body_text": [["12345", "3"]] }
+}
+```
+
+- `name` — только `[a-z0-9_]`. `category`: `authentication` / `utility` / `marketing`.
+- `components` — опционален, элементы: `HEADER` (`format`: `TEXT`/`IMAGE`/`VIDEO`/`DOCUMENT`/`LOCATION`,
+  для `TEXT` — `text`), `FOOTER` (`text`), `BUTTONS` (`buttons[]` с `type`: `QUICK_REPLY`/`URL`/
+  `PHONE_NUMBER`; `URL` требует `url`, `PHONE_NUMBER` требует `phone_number`).
+- **Правило про `example`**: для каждого плейсхолдера `{{n}}` в `body`/`HEADER.text`/URL-кнопки нужен
+  пример с ровно тем же числом элементов, иначе Meta режет шаблон на модерации и API отвечает `422`:
+  - `body` с `{{n}}` → `example.body_text` — массив строк-наборов, каждый набор длиной `n`.
+  - `HEADER` (`format: TEXT`) с `{{n}}` → `example.header_text`, длина `n`.
+  - медиа-`HEADER` (`IMAGE`/`VIDEO`/`DOCUMENT`) → `example.header_handle` обязателен (непустой).
+  - URL-кнопка с `{{n}}` в `url` → `buttons[i].example`, длина `n`.
+- **201**: `{ "name": "order_shipped", "language": "ru", "status": "pending" }`. `422` — валидация или
+  отказ Meta (`TemplateRejected`).
+
+**Удаление:**
+
+```
+DELETE /platform/companies/{external_id}/templates/{id}
+Authorization: Bearer {DEREU_PLATFORM_KEY}
+```
+
+**200**: `{ "status": "deleted" }`. `404` — шаблон не найден. `422` — Meta отказала в удалении.
+
+**Синк из Meta** (подтянуть шаблоны, созданные/изменённые напрямую в Meta Business Manager, минуя Dereu):
+
+```
+POST /platform/companies/{external_id}/templates/sync
+Authorization: Bearer {DEREU_PLATFORM_KEY}
+```
+
+**200**: `{ "synced": 3 }` — число синхронизированных шаблонов. `422` — ошибка синка.
+
+Статус модерации приходит асинхронно вебхуком — см. `template_status_update` в §3.
 
 ## Требования к webhook-приёмнику
 
