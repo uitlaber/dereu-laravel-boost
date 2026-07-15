@@ -76,7 +76,7 @@ final class DereuConnect
     /**
      * URL hosted-страницы с query-параметрами (эквивалент того, что делает widget.js при `window.open`).
      *
-     * @param  string  $connectUrl  напр. `https://connect.dereu.io/connect`
+     * @param  string  $connectUrl  напр. `https://connect.dereu.chat/connect`
      */
     public function buildConnectUrl(string $connectUrl, string $externalId, string $returnUrl, string $nonce, int $ttlSeconds = 600, ?string $companyName = null): string
     {
@@ -172,7 +172,7 @@ final class DereuConnect
  * //            data-prefix="{$signed['p']}" data-sig="{$signed['sig']}"></script>
  *
  * // 2b. Или собрать URL для ручного window.open:
- * $url = $connect->buildConnectUrl('https://connect.dereu.io/connect', 'org_123',
+ * $url = $connect->buildConnectUrl('https://connect.dereu.chat/connect', 'org_123',
  *     'https://app.partner.kz/whatsapp/connected', $nonce);
  *
  * // 3. На return_url — проверить OUT:

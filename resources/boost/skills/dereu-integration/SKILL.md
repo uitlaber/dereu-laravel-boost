@@ -117,8 +117,8 @@ $p   = $keyPrefix;   // напр. plat_ab12cd
 ```
 
 ```html
-<script src="https://connect.dereu.io/widget.js"
-        data-connect-url="https://connect.dereu.io/connect"
+<script src="https://connect.dereu.chat/widget.js"
+        data-connect-url="https://connect.dereu.chat/connect"
         data-payload="{d}" data-prefix="{p}" data-sig="{sig}"
         data-label="Подключить WhatsApp"></script>
 ```
