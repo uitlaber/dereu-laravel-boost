@@ -38,6 +38,11 @@ final class DereuConnect
      * @param  string  $nonce       one-time случайная строка (сохраните на своей стороне для матчинга OUT)
      * @param  int     $ttlSeconds  время жизни payload, 5–10 минут (300–600)
      * @param  string|null  $companyName  опционально — имя компании для провижининга
+     * @param  string|null  $accountMode  опц. режим онбординга (`business_only`|`coexistence`, также
+     *                                    принимает Meta-native `cloud_api`/`smb_coexistence`); без него
+     *                                    сервер дефолтит `business_only` — coexistence-попап (QR WhatsApp
+     *                                    Business App) не покажется. `coexistence` требует включённой
+     *                                    партнёру capability `coexistence`, иначе `403 coexistence_not_entitled`.
      * @return array{d: string, p: string, sig: string, nonce: string, exp: int}
      */
     public function buildSignedPayload(
@@ -46,6 +51,7 @@ final class DereuConnect
         string $nonce,
         int $ttlSeconds = 600,
         ?string $companyName = null,
+        ?string $accountMode = null,
     ): array {
         $exp = time() + $ttlSeconds;
 
@@ -57,6 +63,9 @@ final class DereuConnect
         ];
         if ($companyName !== null && $companyName !== '') {
             $payload['company_name'] = $companyName;
+        }
+        if ($accountMode !== null && $accountMode !== '') {
+            $payload['account_mode'] = $accountMode;
         }
 
         $d = self::base64UrlEncode((string) json_encode(
@@ -78,9 +87,9 @@ final class DereuConnect
      *
      * @param  string  $connectUrl  напр. `https://connect.dereu.chat/connect`
      */
-    public function buildConnectUrl(string $connectUrl, string $externalId, string $returnUrl, string $nonce, int $ttlSeconds = 600, ?string $companyName = null): string
+    public function buildConnectUrl(string $connectUrl, string $externalId, string $returnUrl, string $nonce, int $ttlSeconds = 600, ?string $companyName = null, ?string $accountMode = null): string
     {
-        $signed = $this->buildSignedPayload($externalId, $returnUrl, $nonce, $ttlSeconds, $companyName);
+        $signed = $this->buildSignedPayload($externalId, $returnUrl, $nonce, $ttlSeconds, $companyName, $accountMode);
 
         return $connectUrl.'?'.http_build_query([
             'd' => $signed['d'],
@@ -90,10 +99,28 @@ final class DereuConnect
     }
 
     /**
+     * Единственный статус, означающий успех — WABA активна и можно отправлять.
+     * Литерала `success` в контракте НЕТ, не проверяйте по нему.
+     */
+    public const STATUS_CONNECTED = 'connected';
+
+    /**
+     * `pending` — WABA заведена, но ещё не подтверждена Meta (редкий edge-кейс,
+     * не happy-path). НЕ declined — дозреет до `connected`, не финализировать
+     * как успех, но и не показывать как отказ.
+     */
+    public const STATUS_PENDING = 'pending';
+
+    /** Терминальные/отказные статусы: номер приостановлен или токен затёрт. */
+    public const STATUSES_FAILED = ['suspended', 'deleted'];
+
+    /**
      * Проверить и распарсить OUT-редирект `return_url?result=<b64>&sig=<hmac>`.
      *
      * Верифицирует `sig` тем же секретом (constant-time), декодирует `result`.
-     * Вызывающий ОБЯЗАН дополнительно сматчить `nonce` со своим сохранённым (one-time).
+     * Вызывающий ОБЯЗАН дополнительно сматчить `nonce` со своим сохранённым (one-time)
+     * и разобрать `status` по {@see self::STATUS_CONNECTED}/{@see self::STATUS_PENDING}/
+     * {@see self::STATUSES_FAILED} — успех финализируется ТОЛЬКО при `status === 'connected'`.
      *
      * @return array{dereu_company_id: string, phone_number_id: string, waba_id: string, status: string, nonce: string}|null
      *         null — подпись неверна или payload битый (обрабатывать как отказ)
@@ -163,22 +190,36 @@ final class DereuConnect
  *
  * // 2a. Отдать во виджет:
  * $signed = $connect->buildSignedPayload(
- *     externalId: 'org_123',
- *     returnUrl:  'https://app.partner.kz/whatsapp/connected',
- *     nonce:      $nonce,
- *     ttlSeconds: 600,
+ *     externalId:  'org_123',
+ *     returnUrl:   'https://app.partner.kz/whatsapp/connected',
+ *     nonce:       $nonce,
+ *     ttlSeconds:  600,
+ *     accountMode: 'coexistence', // без этого поля сервер дефолтит business_only —
+ *                                 // coexistence-попап (QR WhatsApp Business App) не покажется
  * );
  * // -> <script src=".../widget.js" data-connect-url="..." data-payload="{$signed['d']}"
  * //            data-prefix="{$signed['p']}" data-sig="{$signed['sig']}"></script>
  *
  * // 2b. Или собрать URL для ручного window.open:
  * $url = $connect->buildConnectUrl('https://connect.dereu.chat/connect', 'org_123',
- *     'https://app.partner.kz/whatsapp/connected', $nonce);
+ *     'https://app.partner.kz/whatsapp/connected', $nonce, accountMode: 'coexistence');
  *
  * // 3. На return_url — проверить OUT:
  * $data = $connect->verifyResult($_GET['result'] ?? '', $_GET['sig'] ?? '');
  * if ($data === null) { http_response_code(400); exit; }          // подпись/формат
  * if (! consumeNonce($data['nonce'])) { http_response_code(409); exit; }  // one-time, ваш стор
+ *
+ * // status: WabaStatus подключённой WABA, НЕ литерал 'success'. Финализировать
+ * // успех можно ТОЛЬКО при 'connected'; 'pending' — ждать (не declined),
+ * // 'suspended'/'deleted' — отказ.
+ * if ($data['status'] !== DereuConnect::STATUS_CONNECTED) {
+ *     if ($data['status'] === DereuConnect::STATUS_PENDING) {
+ *         // показать «активируется», перепроверить статус компании позже
+ *     } else {
+ *         // suspended/deleted — отказ, показать ошибку клиенту
+ *     }
+ *     exit;
+ * }
  * // сохранить $data['dereu_company_id'] / $data['phone_number_id'] / $data['waba_id'];
  *
  * // 4. Забрать api_key S2S (наружу в OUT он не отдаётся):

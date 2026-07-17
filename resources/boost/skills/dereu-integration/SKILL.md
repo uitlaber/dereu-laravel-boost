@@ -80,6 +80,8 @@ Content-Type: application/json
 - `account_mode`: `business_only` (по умолчанию, полная регистрация) или `coexistence` (номер продолжает
   работать в WhatsApp Business App на телефоне клиента параллельно с Cloud API). Также принимает Meta-native
   значения `cloud_api`/`smb_coexistence` как есть — приводить вручную не нужно.
+  ⚠️ Для hosted-connect (§2b, redirect/widget) поле `account_mode` нужно класть в payload `d` ЯВНО — без
+  него сервер дефолтит `business_only`, и coexistence-режим не активируется.
 - **201**: `{ "dereu_company_id": "...", "phone_number_id": "...", "status": "connected", "catalogs": { "owned": [...], "waba": [...] } }`
   — каталоги Meta Commerce приходят сразу в этом ответе при подключении через `code`, отдельный
   `GET .../catalogs` обычно не нужен. Для coexistence/SMB-номеров `waba` в каталогах будет пустым
@@ -110,7 +112,8 @@ Meta App) — домен партнёра вайтлистить не надо, 
 function b64url(string $b): string { return rtrim(strtr(base64_encode($b), '+/', '-_'), '='); }
 
 $payload = ['external_id' => 'org_123', 'return_url' => 'https://app.partner.kz/done',
-            'nonce' => $nonce = bin2hex(random_bytes(16)), 'exp' => time() + 600];   // nonce сохранить
+            'nonce' => $nonce = bin2hex(random_bytes(16)), 'exp' => time() + 600,
+            'account_mode' => 'coexistence'];  // опц.; без него — business_only, см. предупреждение выше
 $d   = b64url(json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
 $sig = b64url(hash_hmac('sha256', $d, $connectSigningSecret, true));   // подписываем строку $d
 $p   = $keyPrefix;   // напр. plat_ab12cd
@@ -131,7 +134,13 @@ $expected = b64url(hash_hmac('sha256', $_GET['result'], $connectSigningSecret, t
 if (! hash_equals($expected, $_GET['sig'])) { abort(400); }              // подпись
 $data = json_decode(base64_decode(strtr($_GET['result'], '-_', '+/')), true);
 if (! consumeNonce($data['nonce'])) { abort(409); }                      // one-time, ваш стор
+
+if ($data['status'] !== 'connected') { abort(409); }   // pending=ждать, suspended/deleted=отказ
 ```
+
+`status` — `WabaStatus` подключённой WABA: `connected` (успех, единственный статус happy-path) \|
+`pending` (заведена, ещё не подтверждена Meta — не declined, дозреет до `connected`) \| `suspended` \|
+`deleted` (отказ). **Литерала `success` НЕТ** — проверяйте `status === 'connected'`.
 
 **3. Забрать `api_key`** (наружу в OUT не отдаётся) — S2S своим `plat_`-ключом:
 
