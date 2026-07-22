@@ -116,7 +116,7 @@ $payload = ['external_id' => 'org_123', 'return_url' => 'https://app.partner.kz/
             'account_mode' => 'coexistence'];  // опц.; без него — business_only, см. предупреждение выше
 $d   = b64url(json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
 $sig = b64url(hash_hmac('sha256', $d, $connectSigningSecret, true));   // подписываем строку $d
-$p   = $keyPrefix;   // напр. plat_ab12cd
+$p   = explode('.', substr($platformKey, strlen('plat_')), 2)[0];   // key_prefix, напр. uHshll27nJQt
 ```
 
 ```html

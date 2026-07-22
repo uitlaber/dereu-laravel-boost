@@ -14,7 +14,8 @@ declare(strict_types=1);
  * повторяет серверную `App\Domain\Connect\Domain\ConnectSignature`:
  *   d   = base64url(json_encode(payload))
  *   sig = base64url(HMAC-SHA256(строка d, connect_signing_secret))  // подписываем строку d, а не её JSON
- *   p   = key_prefix партнёрского credential (по нему сервер находит секрет)
+ *   p   = key_prefix партнёрского credential (сегмент между `plat_` и `.` в platform key,
+ *         по нему сервер находит секрет; отдельно хранить не нужно — выводится из platform key)
  *
  * Секрет (`consec_...`) и `allowed_return_origins` выдаёт оператор Dereu
  * командой `dereu:issue-platform-key --connect-return-origin=...`.
@@ -23,7 +24,8 @@ final class DereuConnect
 {
     /**
      * @param  string  $connectSigningSecret  секрет `consec_...` (хранить в секрет-хранилище, не в git)
-     * @param  string  $keyPrefix             `key_prefix` партнёрского credential (значение для `p`, напр. `plat_ab12cd`)
+     * @param  string  $keyPrefix             `key_prefix` партнёрского credential (значение для `p`, напр. `uHshll27nJQt` —
+     *                                        сегмент между `plat_` и `.` в вашем platform key, не сам ключ целиком)
      */
     public function __construct(
         private readonly string $connectSigningSecret,
@@ -181,7 +183,7 @@ final class DereuConnect
  *
  * $connect = new DereuConnect(
  *     connectSigningSecret: getenv('DEREU_CONNECT_SECRET'),   // consec_...
- *     keyPrefix: getenv('DEREU_CONNECT_PREFIX'),              // напр. plat_ab12cd
+ *     keyPrefix: explode('.', substr(getenv('DEREU_PLATFORM_KEY'), strlen('plat_')), 2)[0], // key_prefix, напр. uHshll27nJQt
  * );
  *
  * // 1. Перед показом кнопки — сгенерировать nonce и сохранить его (Redis/БД) на TTL:
